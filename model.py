@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import argparse
-from matplotlib import pyplot as plt
 
 class Expert(nn.Module):
 	def __init__(self):
@@ -52,7 +51,6 @@ class Discriminator(nn.Module):
 			nn.Linear(in_features=1024, out_features=1)
 			nn.Sigmoid()
 			)
-
 	def forward(self, x):
 		return self.model(x)
 

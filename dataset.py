@@ -51,12 +51,10 @@ def save_dataset(transf, clean, ds, tf):
 		tf_class = transf[i][1]
 		label = transf[i][2]
 		img.save(f'./datasets/{ds}/{tf_type}/transformed/{label_map[label.item()]}_{tf_class}_{i}.png')
-		if i == 10:
-			print(hello)
 	for i in range(len(clean)):
-		img = clean[i][0]
-		label = clean[i][1]
-		cv2.imwrite(f'./datasets/{ds}/{tf_type}/clean/{label_map[label.data]}_{i}.png', img)
+		img = tv.transforms.ToPILImage()(clean[0][i])
+		label = clean[1][i]
+		img.save(f'./datasets/{ds}/{tf_type}/clean/{label_map[label.item()]}_{i}.png')
 
 def transform_paper(imgs, lbls):
 	tf_imgs = []
