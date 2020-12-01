@@ -2,7 +2,6 @@ import numpy as np
 import os
 import argparse
 import torchvision as tv
-import cv2
 import torch
 import torch.utils.data as udata
 import PIL
@@ -30,7 +29,6 @@ def get_dataset(ds, dl):
 	return imgs, lbls
 
 def transform_datasets(images, labels, ds, tf):
-	# images = read_images(ds)
 	mid = int(len(images)/2)
 	training_transformed = images[:mid]
 	labels_transformed = labels[:mid]
@@ -131,16 +129,6 @@ def transform_new(imgs, lbls):
 			tf_type = 'YCOM'
 		tf_imgs.append((tf_img, tf_type, lbls[i]))
 	return tf_imgs
-
-def read_images(ds):
-	images = []
-	for fname in sorted(os.listdir(f'./datasets/{ds}/original')):
-		img = cv2.imread(os.path.join(f'./datasets/{ds}/original', fname))
-		img /= np.amax(img)
-		cv2.imshow(img)
-		images.append(img)
-
-	return images
 
 def add_noise(img):
 	img = img.squeeze(0)
