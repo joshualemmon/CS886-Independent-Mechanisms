@@ -36,14 +36,13 @@ def transform_datasets(images, labels, ds, tf):
 	labels_transformed = labels[:mid]
 	training_clean = images[mid:]
 	labels_clean = labels[:mid]
-
 	if tf == 0:
 		training_transformed = transform_paper(training_transformed, labels_transformed)
 	elif tf == 1:
 		training_transformed = transform_new(training_transformed, labels_transformed)
-	save_dataset(training_transformed, (training_clean, labels_clean), ds, tf)
+	save_dataset(training_transformed, training_clean, labels_clean, ds, tf)
 
-def save_dataset(transf, clean, ds, tf):
+def save_dataset(transf, c_imgs, c_lbls, ds, tf):
 	label_map = {0:'zero', 1:'one', 2:'two', 3:'three', 4:'four', 5:'five', 6:'six', 7:'seven', 8:'eight', 9:'nine'}
 	tf_type = 'paper_transformations' if tf == 0 else 'new_transformations' 
 	for i in range(len(transf)):
@@ -51,9 +50,9 @@ def save_dataset(transf, clean, ds, tf):
 		tf_class = transf[i][1]
 		label = transf[i][2]
 		img.save(f'./datasets/{ds}/{tf_type}/transformed/{label_map[label.item()]}_{tf_class}_{i}.png')
-	for i in range(len(clean)):
-		img = tv.transforms.ToPILImage()(clean[0][i])
-		label = clean[1][i]
+	for i in range(len(c_imgs)):
+		img = tv.transforms.ToPILImage()(c_imgs[i])
+		label = c_lbls[i]
 		img.save(f'./datasets/{ds}/{tf_type}/clean/{label_map[label.item()]}_{i}.png')
 
 def transform_paper(imgs, lbls):
