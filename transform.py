@@ -8,7 +8,7 @@ import numpy as np
 import random
 
 class DataTransform:
-	def __init__(self, tf_type, data, labels, gpu):
+	def __init__(self, tf_type, data, labels, device):
 		self.tf_type = tf_type
 		if tf_type == 0:
 			self.transforms = ['UP', 'UPRIGHT', 'RIGHT', 'DOWNRIGHT', 'DOWN', 'DOWNLEFT', 'LEFT', 'UPLEFT', 'NOISE', 'INVERT']
@@ -20,7 +20,7 @@ class DataTransform:
 		self.transform_labels = labels[:mid]
 		self.clean_data = data[mid:]
 		self.clean_labels = labels[mid:]
-		self.gpu = True if gpu else False
+		self.device = device
 
 	def sample_each_transform(self):
 		if self.tf_type == 0:
@@ -150,15 +150,16 @@ class DataTransform:
 		return tf_imgs
 
 	def add_noise(self, img):
+		img = img.cpu()
 		img = img.squeeze(0)
 		img = img + torch.randn(img.size())*0.25
 		img = img - img.min()
 		img = img/img.max()
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img
 
 	def translate(self, img, d):
+		img = img.cpu()
 		img = tv.transforms.ToPILImage()(img.squeeze(0))
 		img = tv.transforms.functional.affine(img, angle=0, translate=d, scale=1, shear=0, fillcolor=1) #fillcolor not working?
 		img = tv.transforms.ToTensor()(img).squeeze(0)
@@ -187,31 +188,31 @@ class DataTransform:
 				img[-4:,:] = 1.0
 			elif d[1] > 0:
 				img[:4, :]= 1.0
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img
 
 	# Invert pixel values
 	def invert(self, img):
+		img = img.cpu()
 		img = torch.ones_like(img) - img
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img.squeeze(0)
 		# return tv.transforms.ToPILImage()(img.squeeze(0))
 
 	# Rotate image by angle clockwise
 	def rotate(self, img, angle):
+		img = img.cpu()
 		img = tv.transforms.ToPILImage()(img.squeeze(0))
 		img = tv.transforms.functional.pad(img, 100, padding_mode='edge')
 		img = tv.transforms.functional.rotate(img, angle=-angle)
 		img = tv.transforms.ToTensor()(img)
 		img = torch.narrow(img, 1, 100, 32)
 		img = torch.narrow(img, 2, 100, 32)
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img
 
 	def stretch(self, img, axis, scale):
+		img = img.cpu()
 		img = tv.transforms.ToPILImage()(img.squeeze(0))
 		x, y = img.size
 		stretched = x*scale
@@ -224,11 +225,11 @@ class DataTransform:
 			img = tv.transforms.ToTensor()(img)
 			img = torch.narrow(img, 1, int((stretched-32)/2), 32)
 		img = tv.transforms.ToTensor()(img)
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img
 
 	def compress(self, img, axis, scale):
+		img = img.cpu()
 		img = tv.transforms.ToPILImage()(img.squeeze(0))
 		x, y = img.size
 		compressed = int(x/scale)
@@ -240,6 +241,5 @@ class DataTransform:
 			img = tv.transforms.functional.pad(img, (0,int((32-compressed)/2)), padding_mode='edge')
 
 		img = tv.transforms.ToTensor()(img)
-		if self.gpu:
-			img.cuda()
+		img = img.to(self.device)
 		return img

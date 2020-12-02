@@ -24,24 +24,27 @@ def main(args):
 	mb = args.mini_batch if args.mini_batch else 32
 	runs = args.runs if args.runs else 1
 	track_time = args.time if args.time else 0
-	use_gpu = args.gpu if args.gpu else None
-
-	if use_gpu:
-		torch.cuda.set_device(0)
+	# use_gpu = args.gpu if args.gpu else None
+	use_gpu = torch.cuda.is_available()
+	device = torch.device("cuda" if use_gpu else "cpu")
+	# device = torch.device("cpu")
 
 	print('Loading data')
-	imgs, lbls = load_data(dataset, use_gpu)
-	data_loader = DataTransform(transforms, imgs, lbls, use_gpu)
+	imgs, lbls = load_data(dataset, device)
+	print('Creating data loader')
+	data_loader = DataTransform(transforms, imgs, lbls, device)
 	print('Beginning run')
 	for r in range(runs):
 		if track_time == 1:
 			start_time = time.time()
 		experts, disc = get_models(num_exp)
-		if use_gpu:
-			disc.cuda()
-			for e in experts:
-				e.cuda()
+		disc = disc.to(device)
+		for e in experts:
+			e = e.to(device)
 		ex_opts, disc_opt = get_optimizers(experts, disc)
+		# disc_opt = disc_opt.to(device)
+		# for e in ex_opts:
+		# 	e = e.to(device)
 		print('Running AII')
 		experts, ex_opts = approx_id_init(experts, ex_opts, data_loader , aii_iter, aii_mse)
 		print('Training')
@@ -58,7 +61,7 @@ def main(args):
 		metrics.plot_scores(maxiter, run_dir)
 		test(experts, disc, data_loader, mb, run_dir)
 
-def load_data(dataset, transforms, use_gpu=0):
+def load_data(dataset, device):
 	imgs = []
 	lbls = []
 	ds = "MNIST" if dataset == 0 else "omniglot"
@@ -66,8 +69,7 @@ def load_data(dataset, transforms, use_gpu=0):
 	for fname in os.listdir(d_dir):
 		lbl = fname.split('_')[0]
 		img = tv.transforms.ToTensor()(Image.open(d_dir + '/' + fname))
-		if use_gpu:
-			img.cuda()
+		img = img.to(device)
 		imgs.append(img)
 		lbls.append(lbl)
 
@@ -92,6 +94,7 @@ def get_optimizers(experts, discrim):
 	return ex_opts, disc_opt
 
 def save_tensor_img(img, fname):
+	img = img.cpu()
 	img = tv.transforms.ToPILImage()(img.squeeze(0))
 	img.save(fname)
 
