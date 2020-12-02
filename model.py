@@ -53,7 +53,7 @@ class Discriminator(nn.Module):
 			nn.Linear(in_features=1024, out_features=1),
 			nn.Sigmoid())
 		self.flatten = nn.Flatten()
-	def forward(self, x, mb):
+	def forward(self, x):
 		out1 = self.layer1(x)
 		out2 = self.layer2(out1)
 		out3 = self.layer3(out2)

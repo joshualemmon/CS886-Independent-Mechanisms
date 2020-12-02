@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 import random
 import time
 from score_tracker import ScoreTracker
-from transform import DataTransform
+from data_loader import DataLoader
 
 def main(args):
 	dataset = args.dataset if args.dataset else 0
@@ -30,9 +30,9 @@ def main(args):
 	# device = torch.device("cpu")
 
 	print('Loading data')
-	imgs, lbls = load_data(dataset, device)
+	tf_data, cl_data = load_data(dataset, transforms, device)
 	print('Creating data loader')
-	data_loader = DataTransform(transforms, imgs, lbls, device)
+	data_loader = DataLoader(transforms, tf_data, cl_data, device)
 	print('Beginning run')
 	for r in range(runs):
 		if track_time == 1:
@@ -42,9 +42,7 @@ def main(args):
 		for e in experts:
 			e = e.to(device)
 		ex_opts, disc_opt = get_optimizers(experts, disc)
-		# disc_opt = disc_opt.to(device)
-		# for e in ex_opts:
-		# 	e = e.to(device)
+
 		print('Running AII')
 		experts, ex_opts = approx_id_init(experts, ex_opts, data_loader , aii_iter, aii_mse)
 		print('Training')
@@ -61,19 +59,34 @@ def main(args):
 		metrics.plot_scores(maxiter, run_dir)
 		test(experts, disc, data_loader, mb, run_dir)
 
-def load_data(dataset, device):
-	imgs = []
-	lbls = []
-	ds = "MNIST" if dataset == 0 else "omniglot"
-	d_dir = f'./datasets/{ds}/images'
-	for fname in os.listdir(d_dir):
-		lbl = fname.split('_')[0]
-		img = tv.transforms.ToTensor()(Image.open(d_dir + '/' + fname))
-		img = img.to(device)
-		imgs.append(img)
-		lbls.append(lbl)
+def load_data(dataset, transforms, device):
+	tf_imgs = []
+	tf_types = []
+	tf_lbls = []
 
-	return imgs, lbls
+	cl_imgs = []
+	cl_lbls = []
+	ds = "MNIST" if dataset == 0 else "omniglot"
+	tf = "expanded" if transforms == 1 else "paper"
+	d_dir = f'./datasets/{ds}/{tf}/'
+	for fname in os.listdir(d_dir+'/transformed'):
+		lbl = fname.split('_')[0]
+		tf = fname.split('_') [1]
+		img = tv.transforms.ToTensor()(Image.open(d_dir + '/transformed/' + fname))
+		img = img.to(device)
+		tf_imgs.append(img)
+		tf_types.append(tf)
+		tf_lbls.append(lbl)
+	for fname in os.listdir(d_dir+'/clean'):
+		lbl = fname.split('_')[0]
+		img = tv.transforms.ToTensor()(Image.open(d_dir + '/clean/' + fname))
+		img = img.to(device)
+		cl_imgs.append(img)
+		cl_lbls.append(lbl)
+
+	tf_data = list(zip(tf_imgs, tf_types, tf_lbls))
+	cl_data = list(zip(cl_imgs, cl_lbls))
+	return tf_data, cl_data
 
 def get_models(num_exp):
 	experts = []
@@ -104,8 +117,8 @@ def approx_id_init(experts, opts, data_loader, maxiter, err_th):
 
 	loss = nn.MSELoss()
 	for i in range(maxiter):
-		sample, _  = data_loader.get_transformed_sample(1)
-		sample = sample[0].unsqueeze(0).unsqueeze(0)
+		sample, _  = data_loader.get_sample(1)
+		sample = sample[0].unsqueeze(0)
 		indexes = []
 		for j in range(len(experts)):
 			opts[j].zero_grad()
@@ -138,9 +151,12 @@ def approx_id_init(experts, opts, data_loader, maxiter, err_th):
 		opt.zero_grad()
 	return init_experts, init_opts 
 
-def disc_loss(x, c):
+def disc_loss_fake(c):
+	l =  torch.mean(torch.log(1-c), dim=1).sum()
+	return -1*l
+
+def disc_loss_real(x):
 	l = torch.log(x).sum() 
-	l = l + torch.mean(torch.log(1-c), dim=1).sum()
 	return -1*l
 
 def expert_loss(c):
@@ -162,10 +178,14 @@ def get_metric_tracker(tfs):
 
 def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb):
 	metrics = get_metric_tracker(tfs)
+
+	for e in experts:
+		for param in e.parameters():
+			param.requires_grad = False
 	
 	for i in range(maxiter):
-		t_sample, c_sample = data_loader.get_transformed_sample(mb)
-		t_inputs = torch.stack([r.unsqueeze(0) for r in t_sample])
+		t_sample, c_sample = data_loader.get_sample(mb)
+		t_inputs = torch.stack([r for r in t_sample])
 		c_inputs = torch.stack([r for r in c_sample])
 
 		disc_opt.zero_grad()
@@ -175,31 +195,38 @@ def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb):
 		t_outs = [ex(t_inputs) for ex in experts]
 
 
-		clean_scores = disc(c_inputs, mb)
+		clean_scores = disc(c_inputs)
 
 		ex_scores = []
 		for out in t_outs:
-			ex_scores.append(disc(out.detach(), mb))
+			ex_scores.append(disc(out.detach()))
 		ex_scores = torch.cat([s for s in ex_scores], 1)
 
 
 		score_copy = ex_scores.clone().detach()
-
-		d_loss = disc_loss(clean_scores, ex_scores)
-		d_loss.sum().backward(retain_graph=True)
+		# disc_opt.step()
 		max_inds = torch.argmax(score_copy, dim=1)
 		for j in range(mb):
-			e_loss = expert_loss(ex_scores[j][max_inds[j].item()])
+			for param in experts[max_inds[j]].parameters():
+				param.requires_grad = True
+			e_loss = expert_loss(ex_scores[j][max_inds[j].detach().item()])
 			e_loss.backward(retain_graph=True)
 			ex_opts[max_inds[j].item()].step()
+			for param in experts[max_inds[j]].parameters():
+				param.requires_grad = False
 
+
+		d_loss_real = disc_loss_real(clean_scores).sum()
+		d_loss_fake = disc_loss_fake(ex_scores)
+		d_loss = d_loss_real + d_loss_fake
+		d_loss.backward(retain_graph=True)
 		disc_opt.step()
 
 		m_in, m_tfs = data_loader.sample_each_transform()
 		for j, m in enumerate(m_in):
 			for k in range(len(experts)):
-				m_out = experts[k](m.unsqueeze(0))
-				m_score = disc(m_out, 1)
+				m_out = experts[k](m)
+				m_score = disc(m_out)
 				metrics.update_score(k, m_score.item(), m_tfs[j])
 
 		if (i+1) % 100 == 0:
@@ -209,14 +236,14 @@ def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb):
 
 
 def test(experts, disc, data_loader, mb, run_dir):
-	t_sample, _ = data_loader.get_transformed_sample(mb)
-	t_inputs = torch.stack([r.unsqueeze(0) for r in t_sample])
+	t_sample, _ = data_loader.sample_each_transform()
+	# t_inputs = torch.stack([r for r in t_sample])
 
-	for i, t in enumerate(t_inputs):
+	for i, t in enumerate(t_sample):
 		ex_scores = []
-		t_outs = [ex(t.unsqueeze(0)) for ex in experts]
+		t_outs = [ex(t) for ex in experts]
 		for out in t_outs:
-			ex_scores.append(disc(out, mb))
+			ex_scores.append(disc(out))
 		ex_scores = torch.cat([s for s in ex_scores], 1)
 		max_ind = torch.argmax(ex_scores, dim=1)
 		save_tensor_img(t, f'{run_dir}/{i}_in.png')
