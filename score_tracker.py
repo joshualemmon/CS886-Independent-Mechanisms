@@ -1,6 +1,7 @@
 from matplotlib import pyplot as plt
 import torch
 import numpy as np
+import seaborn as sns
 
 class ScoreTracker:
 	def __init__(self, transforms):
@@ -20,18 +21,26 @@ class ScoreTracker:
 		return np.convolve(vals, np.ones((n,))/n)[(n-1):]
 
 	def plot_scores(self, iters, save_loc):
+		sns.set_theme()
 		fig = plt.figure()
-		line_styles = {0:['g', 'solid'], 1:['b', 'solid'], 2:['r', 'solid'], 3:['m', 'solid'], 5:['y', 'solid'], 6:['c', 'solid'], 7:['g', 'dashed'],8:['b', 'dashed'],9:['r', 'dashed'],10:['m', 'dashed']}
+		line_styles = {0:['g', 'solid'], 1:['b', 'solid'], 2:['r', 'solid'], 3:['m', 'solid'], \
+		               4:['c', 'solid'], 5:['y', 'solid'], 6:['g', 'dashed'],7:['b', 'dashed'], \
+		               8:['r', 'dashed'],9:['m', 'dashed'], 10:['c', 'dashed']}
 		for j, key in enumerate(self.score_dict.keys()):
 			tf_dict = self.score_dict[key]
-			ax = fig.add_subplot(5,2,j+1)
+			if self.num_experts == 10:
+				ax = fig.add_subplot(5,2,j+1)
+			else:
+				ax = fig.add_subplot(6,2,j+1)
 			ax.set_xlabel('Iterations')
-			ax.set_ylabel('Disc. Score')
+			ax.set_ylabel('Score')
 			ax.set_title(key)
 			for i, ex in enumerate(tf_dict.keys()):
-				avg = running_avg(tf_dict[ex], 50)
+				avg = self.running_avg(tf_dict[ex], 50)
 				col, sty = line_styles[i]
 				ax.plot(avg, linestyle=sty, color=col)
-		plt.savefig(f'{save_loc}/score_plot.png', bbox_inches='tight')
+			# fig.tight_layout()
+			plt.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.3, hspace=0.3)
+		plt.savefig(f'{save_loc}/score_plot.png')
 
 

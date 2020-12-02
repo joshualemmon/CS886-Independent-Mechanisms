@@ -12,6 +12,7 @@ from matplotlib import pyplot as plt
 import random
 import time
 from score_tracker import ScoreTracker
+from transform import DataTransform
 
 def main(args):
 	dataset = args.dataset if args.dataset else 0
@@ -23,44 +24,54 @@ def main(args):
 	mb = args.mini_batch if args.mini_batch else 32
 	runs = args.runs if args.runs else 1
 	track_time = args.time if args.time else 0
+	use_gpu = args.gpu if args.gpu else None
+
+	if use_gpu:
+		torch.cuda.set_device(0)
+
 	print('Loading data')
-	tf_data, cl_data = load_data(dataset, transforms)
-	data_list = [r[0] for r in tf_data]
+	imgs, lbls = load_data(dataset, use_gpu)
+	data_loader = DataTransform(transforms, imgs, lbls, use_gpu)
 	print('Beginning run')
 	for r in range(runs):
 		if track_time == 1:
 			start_time = time.time()
 		experts, disc = get_models(num_exp)
+		if use_gpu:
+			disc.cuda()
+			for e in experts:
+				e.cuda()
 		ex_opts, disc_opt = get_optimizers(experts, disc)
 		print('Running AII')
-		experts, ex_opts = approx_id_init(experts, ex_opts, data_list , aii_iter, aii_mse)
+		experts, ex_opts = approx_id_init(experts, ex_opts, data_loader , aii_iter, aii_mse)
 		print('Training')
-		experts, disc, metrics = train(experts, ex_opts, disc, disc_opt, tf_data, cl_data, transforms, maxiter, mb)
+		experts, disc, metrics = train(experts, ex_opts, disc, disc_opt, data_loader, transforms, maxiter, mb)
 		if track_time == 1:
 			end_time = time.time()
 			print(f'Run #{r+1} finished after {end_time-start_time} seconds')
 		print('Testing models')
-		test(experts, disc, tf_data, mb)
 
+		ds = 'MNIST' if dataset == 0 else 'omniglot'
+		tf_type = 'paper' if transforms == 0 else 'expanded'
+		run_dir = f'./experiments/{ds}/{tf_type}/run_{r}'
+		os.makedirs(run_dir)
+		metrics.plot_scores(maxiter, run_dir)
+		test(experts, disc, data_loader, mb, run_dir)
 
-def load_data(dataset, transforms):
-	trans_data = []
-	clean_data = []
-
-	t_dir = f'./datasets/{"MNIST" if dataset == 0 else "omniglot"}/{"paper_transformations" if transforms == 0 else "new_transformations"}/transformed'
-	c_dir = f'./datasets/{"MNIST" if dataset == 0 else "omniglot"}/{"paper_transformations" if transforms == 0 else "new_transformations"}/clean'
-
-	for fname in os.listdir(t_dir):
+def load_data(dataset, transforms, use_gpu=0):
+	imgs = []
+	lbls = []
+	ds = "MNIST" if dataset == 0 else "omniglot"
+	d_dir = f'./datasets/{ds}/images'
+	for fname in os.listdir(d_dir):
 		lbl = fname.split('_')[0]
-		tf_type = fname.split('_')[1]
-		img = tv.transforms.ToTensor()(Image.open(t_dir + '/' + fname))
-		trans_data.append((img, lbl, tf_type))
-	for fname in os.listdir(c_dir):
-		lbl = fname.split('_')[0]
-		img = tv.transforms.ToTensor()(Image.open(c_dir + '/' + fname))
-		clean_data.append((img, lbl))
+		img = tv.transforms.ToTensor()(Image.open(d_dir + '/' + fname))
+		if use_gpu:
+			img.cuda()
+		imgs.append(img)
+		lbls.append(lbl)
 
-	return trans_data, clean_data
+	return imgs, lbls
 
 def get_models(num_exp):
 	experts = []
@@ -84,14 +95,14 @@ def save_tensor_img(img, fname):
 	img = tv.transforms.ToPILImage()(img.squeeze(0))
 	img.save(fname)
 
-def approx_id_init(experts, opts, data, maxiter, err_th):
+def approx_id_init(experts, opts, data_loader, maxiter, err_th):
 	init_experts = []
 	init_opts = []
 
 	loss = nn.MSELoss()
 	for i in range(maxiter):
-		sample = get_mb_sample(data, 1)
-		sample = torch.stack(sample[0]).unsqueeze(0)
+		sample, _  = data_loader.get_transformed_sample(1)
+		sample = sample[0].unsqueeze(0).unsqueeze(0)
 		indexes = []
 		for j in range(len(experts)):
 			opts[j].zero_grad()
@@ -146,19 +157,13 @@ def get_metric_tracker(tfs):
 
 	return ScoreTracker(transforms)
 
-def train(experts, ex_opts, disc, disc_opt, tf_data, cl_data, tfs, maxiter, mb):
+def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb):
 	metrics = get_metric_tracker(tfs)
-	print(len(tf_data))
-	print(len(cl_data))
 	
 	for i in range(maxiter):
-		t_sample = get_mb_sample(tf_data, mb)
-		t_inputs = torch.stack([r[0] for r in t_sample])
-		t_labels = [[r[1]] for r in t_sample]
-		t_types = [[r[2]] for r in t_sample]
-		c_sample = get_mb_sample(cl_data, mb)
-		c_inputs = torch.stack([r[0] for r in t_sample])
-		c_labels = [r[1] for r in t_sample]
+		t_sample, c_sample = data_loader.get_transformed_sample(mb)
+		t_inputs = torch.stack([r.unsqueeze(0) for r in t_sample])
+		c_inputs = torch.stack([r for r in c_sample])
 
 		disc_opt.zero_grad()
 		for j in range(len(ex_opts)):
@@ -174,35 +179,45 @@ def train(experts, ex_opts, disc, disc_opt, tf_data, cl_data, tfs, maxiter, mb):
 			ex_scores.append(disc(out.detach(), mb))
 		ex_scores = torch.cat([s for s in ex_scores], 1)
 
+
 		score_copy = ex_scores.clone().detach()
 
 		d_loss = disc_loss(clean_scores, ex_scores)
 		d_loss.sum().backward(retain_graph=True)
 		max_inds = torch.argmax(score_copy, dim=1)
 		for j in range(mb):
-			metrics.update_score(max_inds[j].item(), score_copy[j][max_inds[j].item()].item(), t_types[j][0])
 			e_loss = expert_loss(ex_scores[j][max_inds[j].item()])
 			e_loss.backward(retain_graph=True)
 			ex_opts[max_inds[j].item()].step()
+
 		disc_opt.step()
+
+		m_in, m_tfs = data_loader.sample_each_transform()
+		for j, m in enumerate(m_in):
+			for k in range(len(experts)):
+				m_out = experts[k](m.unsqueeze(0))
+				m_score = disc(m_out, 1)
+				metrics.update_score(k, m_score.item(), m_tfs[j])
+
+		if (i+1) % 100 == 0:
+			print(f'Iteration {i+1}/{maxiter}')
 
 	return experts, disc, metrics
 
 
-def test(experts, disc, tf_data, mb):
-	sample = get_mb_sample(tf_data, mb)
-	t_inputs = torch.stack([r[0] for r in t_sample])
+def test(experts, disc, data_loader, mb, run_dir):
+	t_sample, _ = data_loader.get_transformed_sample(mb)
+	t_inputs = torch.stack([r.unsqueeze(0) for r in t_sample])
 
 	for i, t in enumerate(t_inputs):
-		t_outs = [ex(t) for ex in experts]
+		ex_scores = []
+		t_outs = [ex(t.unsqueeze(0)) for ex in experts]
 		for out in t_outs:
-			ex_scores.append(disc(out.detach(), mb))
+			ex_scores.append(disc(out, mb))
 		ex_scores = torch.cat([s for s in ex_scores], 1)
 		max_ind = torch.argmax(ex_scores, dim=1)
-		save_tensor_img(t, f'in_{i}.png')
-		save_tensor_img(t_outs[max_ind], f'best_{i}.png')
-
-
+		save_tensor_img(t, f'{run_dir}/{i}_in.png')
+		save_tensor_img(t_outs[max_ind], f'{run_dir}/{i}_best.png')
 
 
 
@@ -217,5 +232,6 @@ if __name__ == '__main__':
 	ap.add_argument('-mb', '--mini_batch', type=int)
 	ap.add_argument('-r', '--runs', type=int)
 	ap.add_argument('-t', '--time', type=int)
+	ap.add_argument('-g', '--gpu', type=int)
 
 	main(ap.parse_args())
