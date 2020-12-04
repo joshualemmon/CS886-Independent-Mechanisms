@@ -14,7 +14,7 @@ class LossTracker:
 	def update_expert_loss(self, expert, loss):
 		self.expert_losses[expert].append(loss)
 
-	def updat_disc_loss(self, loss):
+	def update_disc_loss(self, loss):
 		self.disc_losses.append(loss)
 
 	def plot_losses(self, save_loc):

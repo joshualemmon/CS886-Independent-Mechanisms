@@ -2,4 +2,4 @@ datasets/**
 experiments/**
 temp/**
 reset.sh
-train_2.py
+train_*.py

@@ -32,6 +32,7 @@ def main(args):
 
 	print('Loading data')
 	tf_data, cl_data = load_data(dataset, transforms, device)
+	print('Creating data loader')
 	data_loader = DataLoader(transforms, tf_data, cl_data, device)
 	print('Beginning run')
 	for r in range(runs):
@@ -58,6 +59,7 @@ def main(args):
 		os.makedirs(run_dir)
 		scores.plot_scores(run_dir)
 		losses.plot_losses(run_dir)
+
 		test(experts, disc, data_loader, mb, run_dir)
 
 def load_data(dataset, transforms, device):
@@ -155,16 +157,16 @@ def approx_id_init(experts, opts, data_loader, maxiter, err_th):
 def disc_loss_fake(c, inds):
 	device = "cuda" if torch.cuda.is_available() else "cpu"
 	c = c.to(device)
-	l = torch.zeros(1, requires_grad=True)
-	l = l.to(device)
-	for i in range(len(inds)):
-		temp = torch.zeros(1, requires_grad=True)
-		temp = temp.to(device)
-		for j in range(len(c[i])):
-			if j != inds[i]:
-				temp = temp + torch.log(1-c[i][j])
-		l = l + temp/(len(c[i]) - 1)
-	return -1*l
+	# l = torch.zeros(1, requires_grad=True)
+	# l = l.to(device)
+	# for i in range(len(inds)):
+	# 	temp = torch.zeros(1, requires_grad=True)
+	# 	temp = temp.to(device)
+	# 	for j in range(len(c[i])):
+	# 		if j != inds[i]:
+	# 			temp = temp + torch.log(1-c[i][j])
+	# 	l = l + temp/(len(c[i]) - 1)
+	return -1*torch.mean(torch.log(1-c), dim=1)
 
 # def disc_loss_fake(c):
 # 	l =  torch.mean(torch.log(1-c), dim=1).sum()
@@ -179,10 +181,10 @@ def disc_loss_real(x):
 
 def expert_loss(c):
 	l = torch.log(c)
-	l.requires_grad = True
+	# l.requires_grad = True
 	if torch.cuda.is_available():
 		l = l.to("cuda")
-	return l
+	return -1*l
 
 def get_mb_sample(data, mb):
 	samples = []
@@ -201,59 +203,76 @@ def get_metric_tracker(tfs):
 def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb, device):
 	score_tracker = get_metric_tracker(tfs)
 	loss_tracker = LossTracker(len(experts))
-	torch.autograd.set_detect_anomaly(True)
-	loss = nn.BCELoss(reduction='mean')
-	clean_labels = torch.ones(mb).unsqueeze(1)
-	clean_labels = clean_labels.to(device)
-	trans_labels = torch.zeros(mb).unsqueeze(1)
-	trans_labels = trans_labels.to(device)
 
-	# for e in experts:
-	# 	for param in e.parameters():
-	# 		param.requires_grad = False
+	torch.autograd.set_detect_anomaly(True)
+
+	for e in experts:
+		for param in e.parameters():
+			param.requires_grad = False
 	
 	for i in range(maxiter):
 		t_sample, c_sample = data_loader.get_sample(mb)
-		t_inputs = torch.stack([r for r in t_sample]).to(device)
-		c_inputs = torch.stack([r for r in c_sample]).to(device)
+		t_inputs = torch.stack([r for r in t_sample])
+		c_inputs = torch.stack([r for r in c_sample])
+
+		disc_opt.zero_grad()
+		for j in range(len(ex_opts)):
+			ex_opts[j].zero_grad()
+
+		t_outs = [ex(t_inputs) for ex in experts]
+
 
 		clean_scores = disc(c_inputs)
 
-		disc_real_loss = loss(clean_scores, clean_labels)
-		disc_opt.zero_grad()
-		disc_real_loss.backward(retain_graph=True)
-
-		# trans_labels = torch.zeros(mb).unsqueeze(1).to(device)
-		disc_loss_trans = 0
-
 		ex_scores = []
-		ex_outputs = []
-
-		for j, ex in enumerate(experts):
-			ex_out = ex(t_inputs)
-			ex_outputs.append(ex_out)
-			ex_score = disc(ex_out.detach())
-			ex_scores.append(ex_score)
-			disc_loss_trans = disc_loss_trans + loss(ex_score, trans_labels)
-		disc_loss_trans = disc_loss_trans/len(experts)
-
-		disc_loss_trans.backward(retain_graph=True)
-		disc_opt.step()
-
-		ex_outputs = torch.cat(ex_outputs, dim=1)
-		ex_scores = torch.cat(ex_scores, dim=1)
+		for out in t_outs:
+			ex_scores.append(disc(out.detach()))
+		ex_scores = torch.cat([s for s in ex_scores], 1)
+		# score_copy = ex_scores.clone().detach()
+		# score_copy.requires_grad = True
 		max_inds = torch.argmax(ex_scores, dim=1)
 
-		temp_label = torch.ones(1).unsqueeze(1).to(device)
-		for j in range(mb):
-			ind = max_inds[j]
-			e_out = ex_outputs[j][ind].unsqueeze(0).unsqueeze(0)
-			e_score = disc(e_out.detach())
-			ex_loss = loss(e_score, temp_label)
+		# d_loss_real = disc_loss_real(clean_scores).sum()
+		# # print('real:', d_loss_real)
+		# d_loss_fake = disc_loss_fake(ex_scores, max_inds)
+		# # print('fake:', d_loss_fake)
+		# d_loss_real.backward()
+		# d_loss_fake.backward()
+		# # d_loss.backward(retain_graph=True)
+		# disc_opt.step()
 
-			ex_opts[ind].zero_grad()
-			ex_loss.backward(retain_graph=True)
-			ex_opts[ind].step()
+		d_loss_real = disc_loss_real(clean_scores).sum()
+		# print('real:', d_loss_real)
+		d_loss_fake = disc_loss_fake(ex_scores, max_inds).sum()
+		# print('fake:', d_loss_fake)
+		d_loss = d_loss_real + d_loss_fake
+
+		d_l = d_loss.clone().detach()
+		loss_tracker.update_disc_loss(d_l.detach().item())
+		d_loss.backward(retain_graph=True)
+
+		# disc_opt.step()
+		for j in range(mb):
+			for param in experts[max_inds[j]].parameters():
+				param.requires_grad = True
+			e_loss = expert_loss(ex_scores[j][max_inds[j].item()])
+			# print(f'expert: {j}, loss: {e_loss}')
+			e_loss.backward(retain_graph=True)
+			ex_opts[max_inds[j].item()].step()
+			for param in experts[max_inds[j]].parameters():
+				param.requires_grad = False
+
+
+		# d_loss_real = disc_loss_real(clean_scores).sum()
+		# # print('real:', d_loss_real)
+		# d_loss_fake = disc_loss_fake(ex_scores, max_inds)
+		# # print('fake:', d_loss_fake)
+		# d_loss = d_loss_real + d_loss_fake
+
+		# d_l = d_loss.clone().detach()
+		# loss_tracker.update_disc_loss(d_l.detach().item())
+		# d_loss.backward(retain_graph=True)
+		disc_opt.step()
 
 		m_in, m_tfs = data_loader.sample_each_transform()
 		for k in range(len(experts)):
@@ -261,10 +280,10 @@ def train(experts, ex_opts, disc, disc_opt, data_loader, tfs, maxiter, mb, devic
 			for j, m in enumerate(m_in):
 				m_out = experts[k](m)
 				m_score = disc(m_out)
-				score_tracker.update_score(k, m_score.item(), m_tfs[j])
-				e_loss =  e_loss + loss(m_score, temp_label)
-			e_loss = e_loss/len(m_in)
-			loss_tracker.update_expert_loss(k, e_loss)
+				score_tracker.update_score(k, m_score.detach().item(), m_tfs[j])
+				e_loss = expert_loss(m_score.detach())
+				e_loss = e_loss/len(m_in)
+			loss_tracker.update_expert_loss(k, e_loss.detach().item())
 
 
 		if (i+1) % 100 == 0:
