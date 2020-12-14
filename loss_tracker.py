@@ -19,7 +19,6 @@ class LossTracker:
 
 	def plot_losses(self, save_loc):
 		sns.set_theme()
-		# fig = plt.figure()
 		line_styles = {0:['g', 'solid'], 1:['b', 'solid'], 2:['r', 'solid'], 3:['m', 'solid'], \
 		               4:['c', 'solid'], 5:['y', 'solid'], 6:['g', 'dashed'],7:['b', 'dashed'], \
 		               8:['r', 'dashed'],9:['m', 'dashed'], 10:['c', 'dashed']}

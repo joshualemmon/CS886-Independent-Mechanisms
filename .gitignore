@@ -1,5 +1,5 @@
 datasets/**
 experiments/**
 temp/**
-reset.sh
+*.sh
 train_*.py
